@@ -1,0 +1,473 @@
+import Video from '../models/Video.js';
+import Channel from '../models/Channel.js';
+import cloudinary from '../config/cloudinary.js';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+import fs from 'fs';  // Add this import
+import multer from 'multer';  // Also add this if not already imported
+import ffmpeg from 'fluent-ffmpeg';  // And this for audio extraction
+import ffmpegInstaller from '@ffmpeg-installer/ffmpeg'; // FFmpeg binary installer
+import { AssemblyAI } from 'assemblyai';
+import * as ChromaDB from 'chromadb'; // Correct import
+
+// Set FFmpeg path from npm package
+ffmpeg.setFfmpegPath(ffmpegInstaller.path);
+
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// Setup directories
+const TRANSCRIBE_SCRIPT = path.join(__dirname, '../whisper_transcribe.py');
+const tempDir = path.join(__dirname, 'temp');
+const modelDir = path.join(__dirname, '.model');
+
+[tempDir, modelDir].forEach(dir => {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir);
+});
+
+// Initialize AssemblyAI client
+const assemblyaiClient = new AssemblyAI({
+  apiKey: "92d473cb4086427a9514b0e50159d2ae"
+});
+
+// Update multer configuration
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, tempDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const uploadMiddleware = multer({
+  storage: storage,
+  limits: {
+    fileSize: 100 * 1024 * 1024, // 100MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('video/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only video files are allowed!'));
+    }
+  }
+});
+
+// Export the upload middleware
+export const upload = (req, res, next) => {
+  console.log('Upload middleware started');
+  
+  uploadMiddleware.single('videoFile')(req, res, (err) => {
+    console.log('Multer processing completed');
+    
+    
+    if (err instanceof multer.MulterError) {
+      console.error('Multer error:', err);
+      return res.status(400).json({
+        success: false,
+        error: `Upload error: ${err.message}`,
+        details: err
+      });
+    } else if (err) {
+      console.error('Non-Multer error:', err);
+      return res.status(400).json({
+        success: false,
+        error: err.message,
+        details: err
+      });
+    }
+    console.log('Upload middleware successful');
+    next();
+  });
+};
+
+
+const uploadToCloudinary = async (filePath, options) => {
+  return new Promise((resolve, reject) => {
+    cloudinary.uploader.upload(filePath, options, (error, result) => {
+      if (error) reject(error);
+      else resolve(result);
+    });
+  });
+};
+
+const transcribeAudio = async (audioPath) => {
+  try {
+    // First upload the audio file to Cloudinary
+    const audioResult = await uploadToCloudinary(audioPath, {
+      resource_type: 'raw',
+      folder: 'audio'
+    });
+
+    // Use the Cloudinary URL for AssemblyAI transcription
+    const transcript = await assemblyaiClient.transcripts.create({
+      audio_url: audioResult.secure_url,
+      language_code: 'en'
+    });
+
+    // Wait for transcription to complete
+    let transcriptResult;
+    while (true) {
+      transcriptResult = await assemblyaiClient.transcripts.get(transcript.id);
+      if (transcriptResult.status === 'completed') {
+        break;
+      } else if (transcriptResult.status === 'error') {
+        throw new Error('Transcription failed');
+      }
+      await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second before checking again
+    }
+
+    return transcriptResult;
+  } catch (error) {
+    console.error('Transcription error:', error);
+    throw error;
+  }
+};
+
+export const uploadVideo = async (req, res) => {
+  console.log('1. Upload process started...');
+  console.log('Request details:', {
+    filePresent: !!req.file,
+    body: req.body
+  });
+
+  if (!req.file) {
+    console.error('❌ No file in request');
+    return res.status(400).json({ 
+      success: false, 
+      error: 'No video file uploaded' 
+    });
+  }
+
+  const videoPath = req.file.path;
+  const audioPath = path.join(tempDir, `${Date.now()}-audio.mp3`);
+  
+  try {
+    const { title, description } = req.body;
+    
+    // 1. Upload video to Cloudinary
+    console.log('2. Starting video upload to Cloudinary...');
+    const videoResult = await uploadToCloudinary(videoPath, {
+      resource_type: 'video',
+      folder: 'videos'
+    });
+    console.log('✅ Video uploaded successfully:', {
+      url: videoResult.secure_url,
+      publicId: videoResult.public_id
+    });
+
+    // 2. Extract audio (optional - skip if FFmpeg not available)
+    let audioResult = null;
+    let transcriptionResult = { text: "", language: "en" };
+    
+    try {
+      console.log('3. Starting audio extraction...');
+      await new Promise((resolve, reject) => {
+        ffmpeg(videoPath)
+          .toFormat('mp3')
+          .on('progress', (progress) => {
+            console.log('FFmpeg Progress:', progress);
+          })
+          .on('end', () => {
+            console.log('✅ Audio extraction completed');
+            resolve();
+          })
+          .on('error', (err) => {
+            console.error('❌ FFmpeg error:', err);
+            reject(err);
+          })
+          .save(audioPath);
+      });
+
+      // 3. Upload audio
+      console.log('4. Starting audio upload to Cloudinary...');
+      audioResult = await uploadToCloudinary(audioPath, {
+        resource_type: 'raw',
+        folder: 'audio'
+      });
+      console.log('✅ Audio uploaded successfully:', {
+        url: audioResult.secure_url,
+        publicId: audioResult.public_id
+      });
+
+      // 4. Get transcript
+      console.log('5. Starting transcription...');
+      try {
+        transcriptionResult = await transcribeAudio(audioPath);
+        console.log('✅ Transcription completed:', {
+          textLength: transcriptionResult.text?.length || 0,
+          language: transcriptionResult.language || 'en'
+        });
+      } catch (error) {
+        console.error("❌ Transcription error:", error);
+        transcriptionResult = { text: "", language: "en" };
+      }
+    } catch (ffmpegError) {
+      console.warn('⚠️ FFmpeg not available or audio extraction failed. Video will be saved without transcript.');
+      console.warn('💡 To enable transcription, install FFmpeg: https://ffmpeg.org/download.html');
+      console.warn('   On Windows: choco install ffmpeg (with Chocolatey) or download from ffmpeg.org');
+    }
+
+    let cloudinaryVideoId = videoResult.public_id;
+    let cloudinaryAudioId = audioResult?.public_id || null;
+
+    // 5. Check for Empty Transcript
+    console.log('6. Checking transcript...');
+    if (!transcriptionResult.text) {
+      console.warn('⚠️ Empty transcript detected');
+      cloudinaryVideoId = null;
+      cloudinaryAudioId = null;
+    }
+
+    // 6. Create video document
+    console.log('7. Creating video document...');
+    const video = new Video({
+      title,
+      description,
+      videoUrl: videoResult.secure_url,
+      audioUrl: audioResult?.secure_url || null,
+      transcript: transcriptionResult.text || "",
+      language: transcriptionResult.language || 'en',
+      cloudinaryVideoId,
+      cloudinaryAudioId,
+      teacher: req.user._id,
+      teacherEmail: req.user.email,
+      channelName: req.user.channelName
+    });
+
+    await video.save();
+    console.log('✅ Video document saved successfully:', {
+      videoId: video._id,
+      title: video.title
+    });
+
+    // 7. Update channel
+    console.log('8. Updating channel...');
+    await Channel.findOneAndUpdate(
+      { owner: req.user._id },
+      { $push: { videos: video._id }, $inc: { videoCount: 1 } }
+    );
+    console.log('✅ Channel updated successfully');
+
+// 8. Store transcript in ChromaDB
+console.log('9. Storing transcript in ChromaDB...');
+try {
+  // Initialize ChromaDB client with explicit server URL
+  const chromaClient = new ChromaDB.ChromaClient({
+    path: process.env.CHROMA_URL || "http://eduub-chromadb:8000"  // Match your container name
+  });
+  
+  // Define collection name based on user ID
+  const collectionName = `user_${req.user._id}_transcripts`;
+  console.log(`Using ChromaDB collection: ${collectionName}`);
+  
+  // Get or create collection
+  const collection = await chromaClient.getOrCreateCollection({ name: collectionName });
+  
+  // Check if document with this ID already exists
+  const existingDocs = await collection.get({
+    ids: [video._id.toString()]
+  });
+  
+  if (existingDocs && existingDocs.ids && existingDocs.ids.length > 0) {
+    // Delete existing document if it exists
+    console.log('Existing document found, updating...');
+    await collection.delete({
+      ids: [video._id.toString()]
+    });
+  }
+  
+  // Add the document (since we can't use upsert directly)
+  await collection.add({
+    documents: [transcriptionResult.text],
+    ids: [video._id.toString()],
+    metadatas: [{ 
+      userId: req.user._id.toString(),
+      videoId: video._id.toString(),
+      title: video.title,
+      createdAt: new Date().toISOString()
+    }]
+  });
+  
+  console.log('✅ Transcript stored in ChromaDB successfully');
+} catch (chromaError) {
+  console.error('❌ ChromaDB storage error:', chromaError);
+  // Continue with upload process even if ChromaDB fails
+}
+
+
+    console.log('🎉 Upload process completed successfully!');
+    res.status(201).json({ success: true, data: video });
+  } catch (error) {
+    console.error('❌ Upload process failed:', {
+      error: error.message,
+      stack: error.stack
+    });
+    res.status(400).json({ 
+      error: error.message,
+      details: error
+    });
+  } finally {
+    // Cleanup temp files
+    console.log('9. Starting cleanup...');
+    if (req.file) {
+      console.log('Cleaning up video file:', req.file.path);
+      fs.unlink(req.file.path, (err) => {
+        if (err) console.error('❌ Error deleting video file:', err);
+        else console.log('✅ Video file deleted successfully');
+      });
+    }
+    if (fs.existsSync(audioPath)) {
+      console.log('Cleaning up audio file:', audioPath);
+      fs.unlink(audioPath, (err) => {
+        if (err) console.error('❌ Error deleting audio file:', err);
+        else console.log('✅ Audio file deleted successfully');
+      });
+    }
+    console.log('🏁 Process finished');
+  }
+};
+
+export const getVideos = async (req, res) => {
+  try {
+    const { search, channelId } = req.query;
+    let query = {};
+
+    if (search) {
+      query = {
+        $or: [
+          { title: { $regex: search, $options: 'i' } },
+          { description: { $regex: search, $options: 'i' } }
+        ]
+      };
+    }
+
+    // If channelId is provided, filter by teacher ID
+    if (channelId) {
+      query.teacher = channelId;
+      console.log("Filtering videos by channel/teacher ID:", channelId);
+    }
+
+    const videos = await Video.find(query)
+      .populate('teacher', 'username channelName profileImage')
+      .sort({ createdAt: -1 });
+
+    console.log(`Found ${videos.length} videos matching query`);
+    
+    res.json({ success: true, data: videos });
+  } catch (error) {
+    console.error("Error in getVideos:", error);
+    res.status(400).json({ error: error.message });
+  }
+};
+
+export const getVideo = async (req, res) => {
+  try {
+    const video = await Video.findById(req.params.id)
+      .populate('teacher', 'username channelName profileImage');
+    
+    if (!video) {
+      return res.status(404).json({ error: 'Video not found' });
+    }
+
+    // Increment view count
+    video.views += 1;
+    await video.save();
+
+    res.json({ success: true, data: video });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+};
+
+export const deleteVideo = async (req, res) => {
+  try {
+    const video = await Video.findById(req.params.id);
+    
+    if (!video) {
+      return res.status(404).json({ error: 'Video not found' });
+    }
+
+    const isAdmin = req.user.role === 'admin';
+    const isSpecialUser = req.user.username === 'manoranjanhere';
+    const isOwner = video.teacher.toString() === req.user._id.toString();
+    // Check ownership
+    if (!isOwner && !isAdmin && !isSpecialUser) {
+      console.log(`Unauthorized deletion attempt: User ${req.user._id} (${req.user.username}) tried to delete video owned by ${video.teacher}`);
+      return res.status(403).json({ error: 'Not authorized to delete this video' });
+    }
+    console.log(`Video deletion by ${isOwner ? 'owner' : isAdmin ? 'admin' : 'special user'}: ${req.user.username}`);
+
+    // Delete video from cloudinary
+    if (video.cloudinaryVideoId) {
+      try {
+        await cloudinary.uploader.destroy(video.cloudinaryVideoId, { 
+          resource_type: 'video' 
+        });
+      } catch (error) {
+        console.error('Error deleting video from Cloudinary:', error);
+      }
+    }
+
+    // Delete audio from cloudinary
+    if (video.cloudinaryAudioId) {
+      try {
+        await cloudinary.uploader.destroy(video.cloudinaryAudioId, { 
+          resource_type: 'raw' 
+        });
+      } catch (error) {
+        console.error('Error deleting audio from Cloudinary:', error);
+      }
+    }
+
+    try {
+      console.log('Deleting transcript from ChromaDB...');
+      const chromaClient = new ChromaDB.ChromaClient({
+        path: process.env.CHROMA_URL || "http://eduub-chromadb:8000"  // Match your container name
+      });
+      
+      // Use the teacher ID for the collection name, same as during upload
+      const collectionName = `user_${video.teacher}_transcripts`;
+      
+      // Try to get the collection
+      const collection = await chromaClient.getCollection({ name: collectionName });
+      
+      // Delete the document by ID
+      await collection.delete({
+        ids: [video._id.toString()]
+      });
+      
+      console.log('✅ Transcript deleted from ChromaDB successfully');
+    } catch (chromaError) {
+      // Don't fail the whole operation if ChromaDB deletion fails
+      console.error('❌ Error deleting transcript from ChromaDB:', chromaError);
+    }
+
+    // Update channel video count and remove video reference
+    await Channel.findOneAndUpdate(
+      { owner: req.user._id },
+      { 
+        $pull: { videos: video._id }, 
+        $inc: { videoCount: -1 } 
+      }
+    );
+
+    // Delete video document from MongoDB
+    await Video.findByIdAndDelete(video._id);
+
+    res.json({ 
+      success: true, 
+      message: 'Video and associated resources deleted successfully' 
+    });
+  } catch (error) {
+    console.error('Delete video error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to delete video' 
+    });
+  }
+};

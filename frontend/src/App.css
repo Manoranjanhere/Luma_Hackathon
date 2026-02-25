@@ -1,0 +1,173 @@
+
+.app {
+  min-height: 100vh;
+  background-color: var(--background-dark);
+  background-image: 
+    linear-gradient(to right, rgba(0, 229, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(0, 229, 255, 0.03) 1px, transparent 1px),
+    radial-gradient(circle at 30% 20%, rgba(0, 229, 255, 0.07) 0%, transparent 35%),
+    radial-gradient(circle at 70% 65%, rgba(255, 23, 118, 0.07) 0%, transparent 35%),
+    linear-gradient(60deg, rgba(10, 12, 21, 1) 0%, rgba(18, 20, 32, 1) 100%);
+  background-size: 30px 30px, 30px 30px, 100% 100%, 100% 100%, 100% 100%;
+  background-position: center center;
+  background-attachment: fixed; /* This ensures background stays fixed during scroll */
+  display: flex;
+  flex-direction: column;
+  overflow-x: hidden;
+  position: absolute; /* Changed from relative to absolute */
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* Fix 2: Update animated-particles to use absolute positioning */
+.animated-particles {
+  position: absolute !important; /* Changed from fixed to absolute */
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%; 
+  z-index: 0 !important;
+  pointer-events: none;
+  overflow: visible !important; /* Allow particles to be visible outside of container */
+}
+
+/* Fix 3: Ensure particles use absolute positioning */
+.particle {
+  position: absolute !important; /* Already absolute, keeping for consistency */
+  background-color: #00E5FF !important;
+  border-radius: 50%;
+  z-index: 1 !important;
+  box-shadow: 0 0 10px 2px rgba(0, 229, 255, 0.7);
+}
+
+/* Fix 4: Update animation keyframes to allow larger movement ranges */
+@keyframes float-1 {
+  0%, 100% { transform: translate(0, 0); }
+  25% { transform: translate(15vw, 10vh); }
+  50% { transform: translate(8vw, 15vh); }
+  75% { transform: translate(-8vw, 10vh); }
+}
+
+@keyframes float-2 {
+  0%, 100% { transform: translate(0, 0); }
+  33% { transform: translate(-12vw, 8vh); }
+  66% { transform: translate(8vw, -12vh); }
+}
+
+@keyframes float-3 {
+  0%, 100% { transform: translate(0, 0) rotate(0deg); }
+  50% { transform: translate(10vw, -10vh) rotate(180deg); }
+}
+
+@keyframes float-4 {
+  0%, 100% { transform: translate(0, 0); }
+  20% { transform: translate(6vw, -8vh); }
+  40% { transform: translate(12vw, 0vh); }
+  60% { transform: translate(6vw, 8vh); }
+  80% { transform: translate(-6vw, 4vh); }
+}
+
+/* Fix 5: Update the main-content to use absolute positioning */
+.main-content {
+  position: absolute; /* Changed from relative to absolute */
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%); /* Center horizontally */
+  min-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  max-width: 1400px;
+  padding: 20px;
+  box-sizing: border-box;
+  z-index: 10;
+}
+
+/* Fix content wrapper to use absolute positioning */
+.content-wrapper {
+  position: absolute; /* Changed from relative to absolute */
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* Fix 6: Update the app::after element to use absolute positioning for stars */
+.app::after {
+  content: "";
+  position: absolute; /* Changed from fixed to absolute */
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  background-image: 
+    radial-gradient(2px 2px at 20px 30px, rgba(255, 255, 255, 0.3), rgba(0, 0, 0, 0)),
+    radial-gradient(2px 2px at 40px 70px, rgba(255, 255, 255, 0.4), rgba(0, 0, 0, 0)),
+    radial-gradient(2px 2px at 50px 160px, rgba(255, 255, 255, 0.5), rgba(0, 0, 0, 0)),
+    radial-gradient(2px 2px at 90px 40px, rgba(255, 255, 255, 0.3), rgba(0, 0, 0, 0)),
+    radial-gradient(2px 2px at 130px 80px, rgba(255, 255, 255, 0.4), rgba(0, 0, 0, 0)),
+    radial-gradient(2px 2px at 160px 120px, rgba(255, 255, 255, 0.5), rgba(0, 0, 0, 0));
+  background-repeat: repeat;
+  background-size: 200px 200px;
+  opacity: 0.15;
+  z-index: 0;
+  animation: moveStars 150s linear infinite;
+}
+
+/* Fix 7: Update glow overlay to use absolute positioning */
+.glow-overlay {
+  position: absolute; /* Changed from fixed or relative */
+  top: 50%;
+  left: 50%;
+  width: 100%;
+  height: 100%;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(
+    circle at center,
+    rgba(0, 229, 255, 0.05) 0%,
+    rgba(0, 0, 0, 0) 70%
+  );
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.8;
+  animation: pulse 15s infinite alternate;
+}
+
+/* Fix navbar positioning */
+.navbar {
+  position: absolute !important;
+  top: 0;
+  left: 0;
+  width: 100% !important;
+  z-index: 100;
+}
+
+/* Add animation keyframe for stars */
+@keyframes moveStars {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 10000px 0;
+  }
+}
+
+/* Add animation for pulse */
+@keyframes pulse {
+  0% {
+    opacity: 0.4;
+    transform: translate(-50%, -50%) scale(0.8);
+  }
+  100% {
+    opacity: 0.7;
+    transform: translate(-50%, -50%) scale(1.2);
+  }
+}
